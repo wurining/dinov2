@@ -13,7 +13,7 @@ import warnings
 
 from torch import Tensor
 from torch import nn
-
+from visualizer import get_local
 
 logger = logging.getLogger("dinov2")
 
@@ -42,6 +42,7 @@ class Attention(nn.Module):
         proj_bias: bool = True,
         attn_drop: float = 0.0,
         proj_drop: float = 0.0,
+        masked_heads: list = [],
     ) -> None:
         super().__init__()
         self.num_heads = num_heads
@@ -53,6 +54,10 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
 
+        self.masked_heads = masked_heads
+
+    # @get_local("attn")
+    @get_local("heads")
     def forward(self, x: Tensor) -> Tensor:
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
@@ -63,7 +68,10 @@ class Attention(nn.Module):
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
 
-        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        heads = (attn @ v).transpose(1, 2)
+        if len(self.masked_heads) > 0:
+            heads[:, :, self.masked_heads] = 0.0
+        x = heads.reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x

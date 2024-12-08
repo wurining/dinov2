@@ -65,6 +65,8 @@ class DinoVisionTransformer(nn.Module):
         num_register_tokens=0,
         interpolate_antialias=False,
         interpolate_offset=0.1,
+        dinov2_masked_heads=None,
+        dinov2_unmasked_heads=None,
     ):
         """
         Args:
@@ -90,6 +92,8 @@ class DinoVisionTransformer(nn.Module):
             num_register_tokens: (int) number of extra cls tokens (so-called "registers")
             interpolate_antialias: (str) flag to apply anti-aliasing when interpolating positional embeddings
             interpolate_offset: (float) work-around offset to apply when interpolating positional embeddings
+            dinov2_masked_heads: (list) list including index of heads to be masked in each block. This is mutually exclusive with dinov2_unmasked_heads
+            dinov2_unmasked_heads: (list) list including index of heads to be preserved in each block.
         """
         super().__init__()
         norm_layer = partial(nn.LayerNorm, eps=1e-6)
@@ -109,9 +113,7 @@ class DinoVisionTransformer(nn.Module):
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + self.num_tokens, embed_dim))
         assert num_register_tokens >= 0
-        self.register_tokens = (
-            nn.Parameter(torch.zeros(1, num_register_tokens, embed_dim)) if num_register_tokens else None
-        )
+        self.register_tokens = nn.Parameter(torch.zeros(1, num_register_tokens, embed_dim)) if num_register_tokens else None
 
         if drop_path_uniform is True:
             dpr = [drop_path_rate] * depth
@@ -134,6 +136,22 @@ class DinoVisionTransformer(nn.Module):
         else:
             raise NotImplementedError
 
+        # dinov2_unmasked_heads 和 dinov2_masked_heads 不能同时使用
+        assert not (
+            dinov2_unmasked_heads and dinov2_masked_heads
+        ), "Cannot use both dinov2_unmasked_heads and dinov2_masked_heads"
+
+        # dinov2_masked_heads is [[layer,heads], [layer,heads], ...]
+        # transform to [[head,head,head], [head,head,head], ...]
+        self.dinov2_masked_heads = [[] for _ in range(self.n_blocks)]
+        if dinov2_masked_heads:
+            for item in dinov2_masked_heads:
+                self.dinov2_masked_heads[item[0]].append(item[1])
+        elif dinov2_unmasked_heads:
+            self.dinov2_masked_heads: list = [[i for i in range(num_heads)] for _ in range(self.n_blocks)]
+            for item in dinov2_unmasked_heads:
+                self.dinov2_masked_heads[item[0]].remove(item[1])
+
         blocks_list = [
             block_fn(
                 dim=embed_dim,
@@ -147,6 +165,7 @@ class DinoVisionTransformer(nn.Module):
                 act_layer=act_layer,
                 ffn_layer=ffn_layer,
                 init_values=init_values,
+                masked_heads=self.dinov2_masked_heads[i],
             )
             for i in range(depth)
         ]
@@ -168,6 +187,7 @@ class DinoVisionTransformer(nn.Module):
         self.mask_token = nn.Parameter(torch.zeros(1, embed_dim))
 
         self.init_weights()
+        self.dinov2_masked_heads = dinov2_masked_heads
 
     def init_weights(self):
         trunc_normal_(self.pos_embed, std=0.02)
@@ -278,6 +298,8 @@ class DinoVisionTransformer(nn.Module):
             x = blk(x)
             if i in blocks_to_take:
                 output.append(x)
+            if not isinstance(blocks_to_take, range) and max(blocks_to_take) <= i:
+                break
         assert len(output) == len(blocks_to_take), f"only {len(output)} / {len(blocks_to_take)} blocks found"
         return output
 
