@@ -325,10 +325,13 @@ class DinoVisionTransformer(nn.Module):
         return_class_token: bool = False,
         norm=True,
     ) -> Tuple[Union[torch.Tensor, Tuple[torch.Tensor]]]:
-        if self.chunked_blocks:
-            outputs = self._get_intermediate_layers_chunked(x, n)
+        if isinstance(n, list) and n == []:
+            outputs = [self.prepare_tokens_with_masks(x)]
         else:
-            outputs = self._get_intermediate_layers_not_chunked(x, n)
+            if self.chunked_blocks:
+                outputs = self._get_intermediate_layers_chunked(x, n)
+            else:
+                outputs = self._get_intermediate_layers_not_chunked(x, n)
         if norm:
             outputs = [self.norm(out) for out in outputs]
         class_tokens = [out[:, 0] for out in outputs]
