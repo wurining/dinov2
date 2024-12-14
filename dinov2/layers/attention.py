@@ -90,6 +90,8 @@ class MemEffAttention(Attention):
         q, k, v = unbind(qkv, 2)
 
         x = memory_efficient_attention(q, k, v, attn_bias=attn_bias)
+        if len(self.masked_heads) > 0:
+            x[:, :, self.masked_heads] = 0.0
         x = x.reshape([B, N, C])
 
         x = self.proj(x)
